@@ -19,7 +19,7 @@ public class Program
         await _client.ConnectAsync("127.0.0.1", 8080);
         _networkStream = _client.GetStream();
 
-        _player = new Player { ID = "Player1", X = 10, Y = 20, Z = 30 };
+        _player = new Player { X = 10, Y = 20, Z = 30 };
 
         // Подписка на события сервера
         OnWorldStateReceived += HandleWorldState;
@@ -32,7 +32,7 @@ public class Program
         _ = Task.Run(SendPositionPeriodically);
 
         // Задержка для демонстрации (например, 30 секунд работы клиента)
-        await Task.Delay(30000);
+        await Task.Delay(120000);
 
         // Пример отправки сообщения о выходе
         await SendExitMessageAsync(_player);
@@ -75,17 +75,25 @@ public class Program
     {
         while (true)
         {
-            await SendPositionAsync(_player);
+            await SendPositionAsync(new UpdatedPositionState
+            {
+                Position = new Vector3
+                {
+                    X = _player.X,
+                    Y = _player.Y,
+                    Z = _player.Z
+                }
+            });
             await Task.Delay(1000 / 10); // 10 раз в секунду
         }
     }
 
-    private static async Task SendPositionAsync(Player player)
+    private static async Task SendPositionAsync(UpdatedPositionState updatedPositionState)
     {
-        var msg = new Message<Player>
+        var msg = new Message<UpdatedPositionState>
         {
             Type = "position",
-            Payload = player
+            Payload = updatedPositionState
         };
         await SendMessageAsync(msg);
     }
@@ -126,10 +134,18 @@ public class Program
             if (byteCount == 0) return;
 
             var jsonString = Encoding.UTF8.GetString(buffer, 0, byteCount);
-            var msg = JsonSerializer.Deserialize<Message<object>>(jsonString, new JsonSerializerOptions
+            Message<object> msg = null;
+            try
             {
-                PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-            });
+                msg = JsonSerializer.Deserialize<Message<object>>(jsonString, new JsonSerializerOptions
+                {
+                    PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                });
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.ToString());
+            }
 
             switch (msg.Type)
             {
@@ -166,25 +182,37 @@ public class Program
         Console.WriteLine($"World Update at {worldState.Timestamp}:");
         foreach (var player in worldState.Players)
         {
-            Console.WriteLine($"Player {player.ID}: Position ({player.X}, {player.Y}, {player.Z})");
+            Console.WriteLine($"Player {player.Id}: Position ({player.Position.X}, {player.Position.Y}, {player.Position.Z})");
         }
     }
 
     private static void HandleChatMessage(ChatMessage chatMessage)
     {
-        Console.WriteLine($"Chat Message from {chatMessage.ID}: {chatMessage.Message}");
+        Console.WriteLine($"Chat Message from {chatMessage.Id}: {chatMessage.Message}");
     }
 
     private static void HandlePlayerEvent(PlayerEvent playerEvent)
     {
-        Console.WriteLine($"Player {playerEvent.ID} has {playerEvent.Event}");
+        Console.WriteLine($"Player {playerEvent.Id} has {playerEvent.Event}");
     }
 }
 
 // Структуры для данных
 public class Player
 {
-    public string ID { get; set; }
+    public int Id { get; set; }
+    public float X { get; set; }
+    public float Y { get; set; }
+    public float Z { get; set; }
+}
+
+public class UpdatedPositionState
+{
+    public Vector3 Position { get; set; }
+}
+
+public class Vector3
+{
     public float X { get; set; }
     public float Y { get; set; }
     public float Z { get; set; }
@@ -196,22 +224,29 @@ public class Weather
     public float Temperature { get; set; }
 }
 
+public class WorldStatePlayer
+{
+    public int Id { get; set; }
+
+    public Vector3 Position { get; set; }
+}
+
 public class WorldState
 {
-    public List<Player> Players { get; set; }
+    public List<WorldStatePlayer> Players { get; set; }
     public Weather Weather { get; set; }
     public DateTime Timestamp { get; set; }
 }
 
 public class ChatMessage
 {
-    public string ID { get; set; }
+    public int Id { get; set; }
     public string Message { get; set; }
 }
 
 public class PlayerEvent
 {
-    public string ID { get; set; }
+    public int Id { get; set; }
     public string Event { get; set; }
 }
 
