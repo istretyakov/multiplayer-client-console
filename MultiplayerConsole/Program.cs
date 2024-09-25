@@ -15,31 +15,31 @@ public class Program
 
     public static async Task Main(string[] args)
     {
-        _client = new TcpClient();
-        await _client.ConnectAsync("127.0.0.1", 8080);
-        _networkStream = _client.GetStream();
+        using (_client = new TcpClient())
+        {
+            await _client.ConnectAsync("127.0.0.1", 8080);
+            using (_networkStream = _client.GetStream())
+            {
 
-        _player = new Player { X = 10, Y = 20, Z = 30 };
+                _player = new Player { X = 10, Y = 20, Z = 30 };
 
-        // Подписка на события сервера
-        OnWorldStateReceived += HandleWorldState;
-        OnChatMessageReceived += HandleChatMessage;
-        OnPlayerEventReceived += HandlePlayerEvent;
+                // Подписка на события сервера
+                OnWorldStateReceived += HandleWorldState;
+                OnChatMessageReceived += HandleChatMessage;
+                OnPlayerEventReceived += HandlePlayerEvent;
 
-        // Запуск потоков для обработки ввода и сообщений
-        _ = Task.Run(HandleKeyboardInput);
-        _ = Task.Run(ReceiveMessages);
-        _ = Task.Run(SendPositionPeriodically);
+                // Запуск потоков для обработки ввода и сообщений
+                _ = Task.Run(HandleKeyboardInput);
+                _ = Task.Run(ReceiveMessages);
+                _ = Task.Run(SendPositionPeriodically);
 
-        // Задержка для демонстрации (например, 30 секунд работы клиента)
-        await Task.Delay(120000);
+                // Задержка для демонстрации (например, 30 секунд работы клиента)
+                await Task.Delay(120000);
 
-        // Пример отправки сообщения о выходе
-        await SendExitMessageAsync(_player);
-
-        // Закрытие соединения
-        _networkStream.Close();
-        _client.Close();
+                // Пример отправки сообщения о выходе
+                await SendExitMessageAsync(_player);
+            }
+        }
     }
 
     private static async Task HandleKeyboardInput()
@@ -133,47 +133,81 @@ public class Program
             var byteCount = await _networkStream.ReadAsync(buffer, 0, buffer.Length);
             if (byteCount == 0) return;
 
-            var jsonString = Encoding.UTF8.GetString(buffer, 0, byteCount);
-            Message<object> msg = null;
-            try
+            foreach (var item in ReadStructures(buffer, buffer.Length, byteCount))
             {
-                msg = JsonSerializer.Deserialize<Message<object>>(jsonString, new JsonSerializerOptions
+                var jsonString = Encoding.UTF8.GetString(item, 0, item.Length);
+
+                var msg = JsonSerializer.Deserialize<Message<object>>(jsonString, new JsonSerializerOptions
                 {
                     PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
                 });
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine(ex.ToString());
-            }
 
-            switch (msg.Type)
-            {
-                case "world_state":
-                    var worldState = JsonSerializer.Deserialize<WorldState>(msg.Payload.ToString(), new JsonSerializerOptions
-                    {
-                        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-                    });
-                    OnWorldStateReceived?.Invoke(worldState);
-                    break;
-                case "chat":
-                    var chatMsg = JsonSerializer.Deserialize<ChatMessage>(msg.Payload.ToString(), new JsonSerializerOptions
-                    {
-                        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
-                    });
-                    OnChatMessageReceived?.Invoke(chatMsg);
-                    break;
-                case "player_event":
-                    var playerEvent = JsonSerializer.Deserialize<PlayerEvent>(msg.Payload.ToString(), new JsonSerializerOptions
-                    {
-                        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-                    });
-                    OnPlayerEventReceived?.Invoke(playerEvent);
-                    break;
-                default:
-                    Console.WriteLine("Unknown message type");
-                    break;
+                switch (msg.Type)
+                {
+                    case "world_state":
+                        var worldState = JsonSerializer.Deserialize<WorldState>(msg.Payload.ToString(), new JsonSerializerOptions
+                        {
+                            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                        });
+                        OnWorldStateReceived?.Invoke(worldState);
+                        break;
+                    case "chat":
+                        var chatMsg = JsonSerializer.Deserialize<ChatMessage>(msg.Payload.ToString(), new JsonSerializerOptions
+                        {
+                            PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+                        });
+                        OnChatMessageReceived?.Invoke(chatMsg);
+                        break;
+                    case "player_event":
+                        var playerEvent = JsonSerializer.Deserialize<PlayerEvent>(msg.Payload.ToString(), new JsonSerializerOptions
+                        {
+                            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                        });
+                        OnPlayerEventReceived?.Invoke(playerEvent);
+                        break;
+                    default:
+                        Console.WriteLine("Unknown message type");
+                        break;
+                }
             }
+        }
+    }
+
+    public static IEnumerable<byte[]> ReadStructures(byte[] buffer, int bufferSize, int bytesRead)
+    {
+        using var memoryStream = new MemoryStream();
+        int prevOffset = 0;
+
+        int startIndex = 0;
+
+        for (int i = 0; i < bytesRead; i++)
+        {
+            if (buffer[i] == 0)
+            {
+                // Записываем данные до символа \0 в memoryStream
+                if (memoryStream.Length > 0 || i > startIndex)
+                {
+                    memoryStream.Write(buffer, startIndex, i - startIndex);
+                    yield return memoryStream.ToArray();
+                    memoryStream.SetLength(0); // Очистить memoryStream для следующей структуры
+                }
+
+                startIndex = i + 1; // Обновляем начальный индекс для следующей структуры
+            }
+        }
+
+        if (startIndex < bytesRead)
+        {
+            // Записываем оставшиеся данные в memoryStream
+            memoryStream.Write(buffer, startIndex, bytesRead - startIndex);
+        }
+
+        prevOffset = bytesRead - startIndex;
+
+        // Если есть данные в memoryStream после завершения чтения
+        if (memoryStream.Length > 0)
+        {
+            yield return memoryStream.ToArray();
         }
     }
 
